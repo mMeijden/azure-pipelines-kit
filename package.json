@@ -1,0 +1,37 @@
+{
+	"name": "azure-pipelines-kit",
+	"version": "0.0.0",
+	"description": "Generate Azure Pipeline YAML files using TypeScript",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"bin": {
+		"azure-pipelines-kit": "dist/cli/index.js",
+		"azpk": "dist/cli/index.js"
+	},
+	"scripts": {
+		"build": "tsc",
+		"build:cli": "tsc cli/index.ts --outDir dist --module commonjs --target es2020 --esModuleInterop --allowSyntheticDefaultImports --resolveJsonModule --skipLibCheck --moduleResolution node",
+		"dev": "tsc --watch",
+		"generate": "npm run build && node dist/cli/index.js",
+		"cli": "npm run build && node dist/cli/index.js",
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"keywords": [
+		"azure",
+		"pipeline",
+		"yaml",
+		"cdk"
+	],
+	"author": "mmeijden",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^24.0.4",
+		"@types/yaml": "^1.9.7",
+		"ts-node": "^10.9.2",
+		"typescript": "^5.8.3"
+	},
+	"dependencies": {
+		"commander": "^14.0.0",
+		"yaml": "^2.8.0"
+	}
+}

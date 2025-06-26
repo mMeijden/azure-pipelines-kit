@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "paths": {
+      "@jobs/strategies": ["jobs/strategies/index"],
+      "@strategies": ["jobs/strategies/index"],
+    },
+    "target": "es2018",
+    "module": "commonjs",
+    "declaration": true,
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true
+  },
+  "include": ["src", "cli", "examples"],
+  "exclude": ["node_modules", "**/__tests__/*"]
+}
