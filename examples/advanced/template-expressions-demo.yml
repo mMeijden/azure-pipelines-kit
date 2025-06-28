@@ -1,0 +1,133 @@
+variables:
+  buildConfiguration: Release
+  runTests: "true"
+  deployToStaging: "false"
+  deployToProduction: "false"
+  targetPlatform: windows
+  isEnterprise: "false"
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildWindows
+        displayName: Build on Windows
+        condition: eq(variables.targetPlatform, 'windows')
+        pool: windows-latest
+        steps:
+          - powershell: |-
+              Write-Host "🔧 Setting up Windows build environment"
+              Write-Host "Build Configuration: $(buildConfiguration)"
+              $env:DOTNET_CLI_TELEMETRY_OPTOUT = 1
+            displayName: Setup Windows Environment
+          - powershell: |-
+              Write-Host "🏗️ Building application in $(buildConfiguration) mode"
+              # dotnet build --configuration $(buildConfiguration)
+            displayName: Build Application
+          - powershell: |-
+              Write-Host "🧪 Running unit tests"
+              # dotnet test --configuration $(buildConfiguration)
+            displayName: Run Tests (Conditional)
+            condition: eq(variables.runTests, 'true')
+      - job: BuildLinux
+        displayName: Build on Linux
+        condition: eq(variables.targetPlatform, 'linux')
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "🔧 Setting up Linux build environment"
+              echo "Build Configuration: $(buildConfiguration)"
+              export DOTNET_CLI_TELEMETRY_OPTOUT=1
+            displayName: Setup Linux Environment
+          - bash: |-
+              echo "🏗️ Building application on Linux"
+              # dotnet build --configuration $(buildConfiguration)
+            displayName: Build Application
+          - bash: |-
+              echo "🧪 Running Linux-specific tests"
+              # dotnet test --configuration $(buildConfiguration)
+            displayName: Run Linux Tests (Conditional)
+            condition: and(eq(variables.runTests, 'true'), eq(variables.targetPlatform, 'linux'))
+  - stage: DeployStaging
+    jobs:
+      - job: DeployToStaging
+        displayName: Deploy to Staging Environment
+        dependsOn: Build
+        condition: eq(variables.deployToStaging, 'true')
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "🚀 Deploying to staging environment"
+              echo "Target Platform: $(targetPlatform)"
+
+              # This would be conditional in real implementation:
+              if [ "$(targetPlatform)" = "windows" ]; then
+                echo "🪟 Deploying Windows application"
+              else
+                echo "🐧 Deploying Linux application"
+              fi
+            displayName: Platform-specific Deployment
+          - bash: |-
+              echo "🧪 Running smoke tests against staging"
+              # curl -f http://staging.myapp.com/health
+              echo "✅ Smoke tests completed"
+            displayName: Run Staging Smoke Tests
+            condition: eq(variables.runTests, 'true')
+  - stage: DeployProduction
+    jobs:
+      - job: DeployToProduction
+        displayName: Deploy to Production Environment
+        dependsOn: DeployStaging
+        condition: and(eq(variables.deployToProduction, 'true'), succeeded('DeployStaging'))
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "✅ Validating production readiness"
+              echo "🔍 Checking prerequisites..."
+            displayName: Pre-deployment Validation
+          - bash: |-
+              echo "🚀 Starting production deployment"
+
+              # This would use TemplateExpression.if() in real implementation:
+              if [ "$(isEnterprise)" = "true" ]; then
+                echo "🔵🟢 Performing blue-green deployment for enterprise"
+                echo "🔄 Switching traffic to new deployment..."
+              else
+                echo "📈 Performing standard rolling deployment"
+                echo "📦 Updating application..."
+              fi
+            displayName: Enterprise vs Standard Deployment
+          - bash: |-
+              echo "🏥 Running production health checks"
+              # curl -f https://api.myapp.com/health
+              echo "✅ Production deployment verified!"
+            displayName: Post-deployment Health Check
+            condition: and(eq(variables.runTests, 'true'), succeeded())
+          - bash: |-
+              # This would use TemplateExpression.if(succeeded(), ..., ...) in real implementation:
+              echo "📢 Sending deployment notification"
+
+              if [ "$AGENT_JOBSTATUS" = "Succeeded" ]; then
+                echo "✅ Deployment successful! Notifying team."
+              else
+                echo "❌ Deployment failed! Sending failure notification and rollback instructions."
+              fi
+            displayName: Deployment Notifications
+  - stage: Cleanup
+    jobs:
+      - job: CleanupResources
+        displayName: Cleanup Resources
+        dependsOn: DeployProduction
+        condition: always()
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "🧹 Performing cleanup operations"
+
+              # This would use TemplateExpression.if() for different cleanup strategies:
+              if [ "$AGENT_JOBSTATUS" = "Succeeded" ]; then
+                echo "✅ Pipeline succeeded - performing success cleanup"
+                echo "📦 Cleaning up temporary resources"
+              else
+                echo "❌ Pipeline failed - performing failure cleanup"
+                echo "🔍 Preserving logs for investigation"
+              fi
+            displayName: Conditional Cleanup

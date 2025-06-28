@@ -1,4 +1,4 @@
-import { Script, StepsBuilder } from "../src/steps";
+import { Script, StepsBuilder } from "../../src/steps";
 
 // Example: Simple ScriptStep usage
 
@@ -44,9 +44,6 @@ const buildSteps = StepsBuilder.create()
 	.build();
 
 // Example outputs:
-console.log("Simple script:", simpleScript.synthesize());
-console.log("Complex script:", complexScript.synthesize());
-console.log("All build steps:", buildSteps);
 
 // The synthesized outputs will be:
 // Simple script: { script: "echo hello world" }

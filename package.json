@@ -14,7 +14,11 @@
 		"dev": "tsc --watch",
 		"generate": "npm run build && node dist/cli/index.js",
 		"cli": "npm run build && node dist/cli/index.js",
-		"test": "echo \"Error: no test specified\" && exit 1"
+		"test": "jest",
+		"test:watch": "jest --watch",
+		"test:coverage": "jest --coverage",
+		"test:resources": "jest test/resources.test.ts test/repository-resource.test.ts test/container-resource.test.ts test/pipeline-resource.test.ts test/build-resource.test.ts test/package-resource.test.ts test/webhook-resource.test.ts",
+		"test:unit": "jest --testPathPattern='test/.*\\.test\\.ts$'"
 	},
 	"keywords": [
 		"azure",
@@ -25,8 +29,11 @@
 	"author": "mmeijden",
 	"license": "MIT",
 	"devDependencies": {
+		"@types/jest": "^30.0.0",
 		"@types/node": "^24.0.4",
 		"@types/yaml": "^1.9.7",
+		"jest": "^30.0.3",
+		"ts-jest": "^29.4.0",
 		"ts-node": "^10.9.2",
 		"typescript": "^5.8.3"
 	},

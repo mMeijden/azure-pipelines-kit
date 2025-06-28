@@ -1,0 +1,172 @@
+trigger:
+  branches:
+    include:
+      - main
+      - infrastructure/*
+  paths:
+    include:
+      - terraform/*
+      - scripts/*
+      - "*.tf"
+      - "*.tfvars"
+variables:
+  terraformVersion: 1.5.0
+  environment: staging
+  deployToStaging: "true"
+  deployToProduction: "false"
+  runValidation: "true"
+  runSecurityScan: "true"
+  autoApprove: "false"
+  backendConfigFile: backend-staging.tfvars
+stages:
+  - stage: InfrastructureValidation
+    jobs:
+      - job: ValidateInfrastructure
+        displayName: Validate Terraform Configuration
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "Installing Terraform $(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+              unzip terraform_$(terraformVersion)_linux_amd64.zip
+              sudo mv terraform /usr/local/bin/
+              terraform --version
+            displayName: Setup Terraform
+          - bash: |-
+              echo "Checking Terraform formatting..."
+              terraform fmt -check=true -recursive
+            displayName: Terraform Format Check
+          - bash: |-
+              echo "Initializing Terraform..."
+              terraform init -backend-config=$(backendConfigFile)
+              echo "Validating Terraform configuration..."
+              terraform validate
+            displayName: Terraform Init and Validate
+          - ${{ if eq(variables.runSecurityScan, 'true') }}:
+              bash: |-
+                echo "Running infrastructure security scan..."
+                curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+                tfsec . --format json --out tfsec-report.json
+                pip install checkov
+                checkov -d . --framework terraform --output json --output-file checkov-report.json
+              displayName: Infrastructure Security Scan
+          - publish: "*-report.json"
+            artifact: security-reports
+            displayName: Publish Security Reports
+  - stage: TerraformPlan
+    jobs:
+      - job: TerraformPlan
+        displayName: Generate Terraform Plan
+        dependsOn:
+          - ValidateInfrastructure
+        pool: ubuntu-latest
+        steps:
+          - ${{ if succeeded('ValidateInfrastructure') }}:
+              bash: |-
+                echo "Setting up Terraform for planning..."
+                terraform init -backend-config=$(backendConfigFile)
+              displayName: Setup Terraform for Planning
+          - ${{ if eq(variables.environment, 'staging') }}:
+              bash: |-
+                echo "Generating Terraform plan for staging..."
+                terraform plan -var-file="staging.tfvars" -out=staging.tfplan
+                terraform show -json staging.tfplan > staging-plan.json
+              displayName: Generate Staging Plan
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Generating Terraform plan for production..."
+                terraform plan -var-file="production.tfvars" -out=production.tfplan
+                terraform show -json production.tfplan > production-plan.json
+              displayName: Generate Production Plan
+          - bash: |-
+              echo "Analyzing infrastructure changes..."
+              python scripts/analyze_plan.py --plan-file staging-plan.json --output analysis-report.json
+            displayName: Analyze Infrastructure Changes
+          - publish: "*.tfplan"
+            artifact: terraform-plans
+            displayName: Publish Terraform Plans
+  - stage: DeployStaging
+    jobs:
+      - job: DeployToStaging
+        displayName: Deploy Infrastructure to Staging
+        dependsOn:
+          - TerraformPlan
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(eq(variables.deployToStaging, 'true'), succeeded('TerraformPlan')) }}:
+              bash: |-
+                echo "Applying Terraform plan to staging..."
+                terraform init -backend-config=$(backendConfigFile)
+
+                if [ "$(autoApprove)" = "true" ]; then
+                	terraform apply -auto-approve staging.tfplan
+                else
+                	terraform apply staging.tfplan
+                fi
+              displayName: Apply Staging Infrastructure
+          - ${{ if succeeded('DeployToStaging') }}:
+              bash: |-
+                echo "Validating deployed staging infrastructure..."
+                python tests/infrastructure_tests.py --environment staging
+                python tests/connectivity_tests.py --environment staging
+              displayName: Validate Staging Infrastructure
+          - ${{ if succeeded('DeployToStaging') }}:
+              bash: |-
+                echo "Updating infrastructure documentation..."
+                terraform-docs markdown table . > docs/infrastructure.md
+                python scripts/generate_diagrams.py --environment staging
+              displayName: Update Infrastructure Documentation
+  - stage: DeployProduction
+    jobs:
+      - job: DeployToProduction
+        displayName: Deploy Infrastructure to Production
+        dependsOn:
+          - DeployToStaging
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(eq(variables.deployToProduction, 'true'), eq(variables.Build.SourceBranch, 'refs/heads/main'), succeeded('DeployToStaging')) }}:
+              bash: |-
+                echo "Running production deployment pre-checks..."
+                python scripts/check_staging_health.py
+                python scripts/validate_prod_readiness.py
+              displayName: Production Deployment Pre-checks
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Creating production infrastructure backup..."
+                terraform state pull > backup/terraform-state-$(date +%Y%m%d-%H%M%S).json
+                python scripts/backup_resources.py --environment production
+              displayName: Create Infrastructure Backup
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Applying Terraform plan to production..."
+                terraform init -backend-config=backend-production.tfvars
+                terraform apply production.tfplan
+              displayName: Apply Production Infrastructure
+          - ${{ if succeeded('DeployToProduction') }}:
+              bash: |-
+                echo "Validating production infrastructure..."
+                python tests/production_tests.py --environment production
+                python tests/performance_tests.py --environment production
+                python tests/security_tests.py --environment production
+              displayName: Production Infrastructure Validation
+  - stage: InfrastructureMonitoring
+    jobs:
+      - job: SetupMonitoring
+        displayName: Setup Infrastructure Monitoring
+        dependsOn:
+          - DeployToProduction
+        pool: ubuntu-latest
+        steps:
+          - ${{ if succeeded('DeployToProduction') }}:
+              bash: |-
+                echo "Setting up infrastructure monitoring..."
+                kubectl apply -f monitoring/prometheus/ -n monitoring
+                kubectl apply -f monitoring/grafana/ -n monitoring
+                python scripts/setup_alerts.py --environment $(environment)
+              displayName: Configure Infrastructure Monitoring
+          - ${{ if always() }}:
+              bash: |-
+                echo "Updating infrastructure inventory..."
+                terraform output -json > infrastructure-inventory.json
+                python scripts/update_cmdb.py --inventory infrastructure-inventory.json
+              displayName: Update Infrastructure Inventory

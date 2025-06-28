@@ -1,0 +1,250 @@
+trigger:
+  branches:
+    include:
+      - main
+      - infrastructure/*
+  paths:
+    include:
+      - terraform/*
+      - scripts/*
+      - "*.tf"
+      - "*.tfvars"
+variables:
+  terraformVersion: 1.5.0
+  environment: staging
+  deployToStaging: "true"
+  deployToProduction: "false"
+  runValidation: "true"
+  runSecurityScan: "true"
+  autoApprove: "false"
+  backendConfigFile: backend-staging.tfvars
+stages:
+  - stage: InfrastructureValidation
+    jobs:
+      - job: ValidateInfrastructure
+        displayName: Validate Terraform Configuration
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "Installing Terraform $(terraformVersion)..."
+              wget https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
+              unzip terraform_$(terraformVersion)_linux_amd64.zip
+              sudo mv terraform /usr/local/bin/
+              terraform --version
+            displayName: Setup Terraform
+          - bash: |-
+              echo "Checking Terraform formatting..."
+              terraform fmt -check=true -recursive
+              echo "Format check completed"
+            displayName: Terraform Format Check
+          - bash: |-
+              echo "Initializing Terraform..."
+              terraform init -backend-config=$(backendConfigFile)
+
+              echo "Validating Terraform configuration..."
+              terraform validate
+              echo "Validation completed"
+            displayName: Terraform Init and Validate
+          - ${{ if eq(variables.runSecurityScan, 'true') }}:
+              bash: |-
+                echo "Running infrastructure security scan..."
+
+                # Install tfsec
+                curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+
+                # Run security scan
+                tfsec . --format json --out tfsec-report.json
+
+                # Install checkov for additional scanning
+                pip install checkov
+                checkov -d . --framework terraform --output json --output-file checkov-report.json
+
+                echo "Security scan completed"
+              displayName: Infrastructure Security Scan
+          - publish: "*-report.json"
+            artifact: security-reports
+            displayName: Publish Security Reports
+  - stage: TerraformPlan
+    jobs:
+      - job: TerraformPlan
+        displayName: Generate Terraform Plan
+        dependsOn:
+          - ValidateInfrastructure
+        pool: ubuntu-latest
+        steps:
+          - ${{ if succeeded('ValidateInfrastructure') }}:
+              bash: |-
+                echo "Setting up Terraform for planning..."
+                terraform init -backend-config=$(backendConfigFile)
+              displayName: Setup Terraform for Planning
+          - ${{ if eq(variables.environment, 'staging') }}:
+              bash: |-
+                echo "Generating Terraform plan for staging..."
+                terraform plan -var-file="staging.tfvars" -out=staging.tfplan
+
+                echo "Converting plan to JSON for analysis..."
+                terraform show -json staging.tfplan > staging-plan.json
+              displayName: Generate Staging Plan
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Generating Terraform plan for production..."
+                terraform plan -var-file="production.tfvars" -out=production.tfplan
+
+                echo "Converting plan to JSON for analysis..."
+                terraform show -json production.tfplan > production-plan.json
+              displayName: Generate Production Plan
+          - bash: |-
+              echo "Analyzing infrastructure changes..."
+
+              # Custom script to analyze the plan
+              python scripts/analyze_plan.py --plan-file staging-plan.json --output analysis-report.json
+
+              echo "Change analysis completed"
+            displayName: Analyze Infrastructure Changes
+          - publish: "*.tfplan"
+            artifact: terraform-plans
+            displayName: Publish Terraform Plans
+          - publish: "*-plan.json"
+            artifact: plan-analysis
+            displayName: Publish Plan Analysis
+  - stage: DeployStaging
+    jobs:
+      - job: DeployToStaging
+        displayName: Deploy Infrastructure to Staging
+        dependsOn:
+          - TerraformPlan
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.environment, 'staging') }}:
+              bash: |-
+                echo "Downloading Terraform plan for staging..."
+                # Download staging.tfplan from artifacts
+              displayName: Download Terraform Plan
+          - ${{ if and(eq(variables.deployToStaging, 'true'), succeeded('TerraformPlan')) }}:
+              bash: |-
+                echo "Applying Terraform plan to staging..."
+                terraform init -backend-config=$(backendConfigFile)
+
+                if [ "$(autoApprove)" = "true" ]; then
+                	terraform apply -auto-approve staging.tfplan
+                else
+                	echo "Manual approval required for staging deployment"
+                	# In a real scenario, this would wait for manual approval
+                	terraform apply staging.tfplan
+                fi
+
+                echo "Staging infrastructure deployment completed"
+              displayName: Apply Staging Infrastructure
+          - ${{ if succeeded('DeployToStaging') }}:
+              bash: |-
+                echo "Validating deployed staging infrastructure..."
+
+                # Run infrastructure tests
+                python tests/infrastructure_tests.py --environment staging
+
+                # Test connectivity and health
+                python tests/connectivity_tests.py --environment staging
+
+                echo "Staging validation completed"
+              displayName: Validate Staging Infrastructure
+          - ${{ if succeeded('DeployToStaging') }}:
+              bash: |-
+                echo "Updating infrastructure documentation..."
+
+                # Generate documentation from Terraform
+                terraform-docs markdown table . > docs/infrastructure.md
+
+                # Update architecture diagrams
+                python scripts/generate_diagrams.py --environment staging
+              displayName: Update Infrastructure Documentation
+  - stage: DeployProduction
+    jobs:
+      - job: DeployToProduction
+        displayName: Deploy Infrastructure to Production
+        dependsOn:
+          - DeployToStaging
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(eq(variables.deployToProduction, 'true'), eq(variables.Build.SourceBranch, 'refs/heads/main'), succeeded('DeployToStaging')) }}:
+              bash: |-
+                echo "Running production deployment pre-checks..."
+
+                # Check staging health
+                python scripts/check_staging_health.py
+
+                # Validate production readiness
+                python scripts/validate_prod_readiness.py
+
+                echo "Pre-checks completed"
+              displayName: Production Deployment Pre-checks
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Creating production infrastructure backup..."
+
+                # Export current Terraform state
+                terraform state pull > backup/terraform-state-$(date +%Y%m%d-%H%M%S).json
+
+                # Backup critical resources
+                python scripts/backup_resources.py --environment production
+
+                echo "Backup completed"
+              displayName: Create Infrastructure Backup
+          - ${{ if eq(variables.deployToProduction, 'true') }}:
+              bash: |-
+                echo "Applying Terraform plan to production..."
+                terraform init -backend-config=backend-production.tfvars
+
+                # Production requires manual approval
+                echo "Applying production changes..."
+                terraform apply production.tfplan
+
+                echo "Production infrastructure deployment completed"
+              displayName: Apply Production Infrastructure
+          - ${{ if succeeded('DeployToProduction') }}:
+              bash: |-
+                echo "Validating production infrastructure..."
+
+                # Comprehensive production tests
+                python tests/production_tests.py --environment production
+
+                # Performance validation
+                python tests/performance_tests.py --environment production
+
+                # Security validation
+                python tests/security_tests.py --environment production
+
+                echo "Production validation completed"
+              displayName: Production Infrastructure Validation
+  - stage: InfrastructureMonitoring
+    jobs:
+      - job: SetupMonitoring
+        displayName: Setup Infrastructure Monitoring
+        dependsOn:
+          - DeployToProduction
+        pool: ubuntu-latest
+        steps:
+          - ${{ if succeeded('DeployToProduction') }}:
+              bash: |-
+                echo "Setting up infrastructure monitoring..."
+
+                # Deploy monitoring stack
+                kubectl apply -f monitoring/prometheus/ -n monitoring
+                kubectl apply -f monitoring/grafana/ -n monitoring
+
+                # Configure alerts
+                python scripts/setup_alerts.py --environment $(environment)
+
+                echo "Monitoring setup completed"
+              displayName: Configure Infrastructure Monitoring
+          - ${{ if always() }}:
+              bash: |-
+                echo "Updating infrastructure inventory..."
+
+                # Generate infrastructure inventory
+                terraform output -json > infrastructure-inventory.json
+
+                # Update CMDB
+                python scripts/update_cmdb.py --inventory infrastructure-inventory.json
+
+                echo "Inventory update completed"
+              displayName: Update Infrastructure Inventory

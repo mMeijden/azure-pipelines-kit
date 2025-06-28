@@ -1,0 +1,164 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+      - feature/*
+  paths:
+    include:
+      - services/user-service/*
+      - services/order-service/*
+      - services/payment-service/*
+      - infrastructure/*
+      - docker-compose.yml
+variables:
+  dockerRegistry: myregistry.azurecr.io
+  kubernetesNamespace: production
+  environment: staging
+  deployUserService: "true"
+  deployOrderService: "true"
+  deployPaymentService: "true"
+  runIntegrationTests: "true"
+  deployToProduction: "false"
+stages:
+  - stage: BuildServices
+    jobs:
+      - job: BuildUserService
+        displayName: Build User Service
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.deployUserService, 'true') }}:
+              bash: |-
+                echo "Building user service..."
+                cd services/user-service
+                docker build -t $(dockerRegistry)/user-service:$(Build.BuildId) .
+                docker push $(dockerRegistry)/user-service:$(Build.BuildId)
+              displayName: Build User Service Docker Image
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running user service tests..."
+                cd services/user-service
+                npm test
+                npm run test:integration
+              displayName: Test User Service
+      - job: BuildOrderService
+        displayName: Build Order Service
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.deployOrderService, 'true') }}:
+              bash: |-
+                echo "Building order service..."
+                cd services/order-service
+                docker build -t $(dockerRegistry)/order-service:$(Build.BuildId) .
+                docker push $(dockerRegistry)/order-service:$(Build.BuildId)
+              displayName: Build Order Service Docker Image
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running order service tests..."
+                cd services/order-service
+                go test ./...
+                go test -tags=integration ./...
+              displayName: Test Order Service
+      - job: BuildPaymentService
+        displayName: Build Payment Service
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.deployPaymentService, 'true') }}:
+              bash: |-
+                echo "Building payment service..."
+                cd services/payment-service
+                docker build -t $(dockerRegistry)/payment-service:$(Build.BuildId) .
+                docker push $(dockerRegistry)/payment-service:$(Build.BuildId)
+              displayName: Build Payment Service Docker Image
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running payment service tests..."
+                cd services/payment-service
+                python -m pytest tests/
+                echo "Running security scans..."
+                bandit -r src/
+              displayName: Test Payment Service with Security Scan
+  - stage: Integration
+    jobs:
+      - job: IntegrationTests
+        displayName: Microservices Integration Tests
+        dependsOn:
+          - BuildUserService
+          - BuildOrderService
+          - BuildPaymentService
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(succeeded('BuildUserService'), succeeded('BuildOrderService'), succeeded('BuildPaymentService')) }}:
+              bash: |-
+                echo "Starting integration test environment..."
+                docker-compose -f docker-compose.test.yml up -d
+                sleep 30
+              displayName: Start Test Environment
+          - ${{ if eq(variables.runIntegrationTests, 'true') }}:
+              bash: |-
+                echo "Running end-to-end integration tests..."
+                npm run test:e2e
+                echo "Testing service-to-service communication..."
+                npm run test:contract
+              displayName: Run End-to-End Tests
+          - ${{ if always() }}:
+              bash: |-
+                echo "Cleaning up test environment..."
+                docker-compose -f docker-compose.test.yml down
+                docker system prune -f
+              displayName: Cleanup Test Environment
+  - stage: DeployStaging
+    jobs:
+      - job: DeployToStaging
+        displayName: Deploy to Staging Environment
+        dependsOn:
+          - IntegrationTests
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.environment, 'staging') }}:
+              bash: |-
+                echo "Deploying services to staging..."
+                kubectl set image deployment/user-service user-service=$(dockerRegistry)/user-service:$(Build.BuildId) -n staging
+                kubectl set image deployment/order-service order-service=$(dockerRegistry)/order-service:$(Build.BuildId) -n staging
+                kubectl set image deployment/payment-service payment-service=$(dockerRegistry)/payment-service:$(Build.BuildId) -n staging
+                kubectl rollout status deployment --all -n staging
+              displayName: Deploy Services to Staging
+          - ${{ if succeeded('DeployToStaging') }}:
+              bash: |-
+                echo "Running smoke tests on staging..."
+                curl -f http://staging.myapp.com/health/user-service
+                curl -f http://staging.myapp.com/health/order-service  
+                curl -f http://staging.myapp.com/health/payment-service
+              displayName: Run Staging Smoke Tests
+  - stage: DeployProduction
+    jobs:
+      - job: DeployToProduction
+        displayName: Deploy to Production Environment
+        dependsOn:
+          - DeployToStaging
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(eq(variables.deployToProduction, 'true'), eq(variables.Build.SourceBranch, 'refs/heads/main')) }}:
+              bash: |-
+                echo "Starting blue-green deployment..."
+
+                # Deploy to green environment
+                kubectl apply -f k8s/production/green/ -n production
+                kubectl wait --for=condition=available deployment --all -n production-green --timeout=300s
+
+                # Switch traffic to green
+                kubectl patch service frontend -p '{"spec":{"selector":{"version":"green"}}}' -n production
+              displayName: Blue-Green Deployment to Production
+          - ${{ if succeeded('DeployToProduction') }}:
+              bash: |-
+                echo "Running production health checks..."
+                curl -f https://api.myapp.com/health
+                sleep 60
+              displayName: Production Health Check
+          - ${{ if failed('DeployToProduction') }}:
+              bash: |-
+                echo "Production deployment failed - initiating rollback..."
+                kubectl rollout undo deployment/user-service -n production
+                kubectl rollout undo deployment/order-service -n production  
+                kubectl rollout undo deployment/payment-service -n production
+              displayName: Production Rollback

@@ -1,0 +1,147 @@
+trigger:
+  branches:
+    include:
+      - main
+      - experiment/*
+  paths:
+    include:
+      - models/*
+      - data/*
+      - training/*
+      - requirements.txt
+variables:
+  pythonVersion: "3.9"
+  modelVersion: v1.0
+  datasetVersion: latest
+  runTraining: "true"
+  runValidation: "true"
+  deployModel: "false"
+  minimumAccuracy: "0.85"
+  environment: staging
+  mlflowTrackingUri: https://mlflow.mycompany.com
+stages:
+  - stage: DataPreparation
+    jobs:
+      - job: PrepareData
+        displayName: Data Preparation and Validation
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "Setting up Python $(pythonVersion) environment..."
+              python --version
+              pip install --upgrade pip
+              pip install -r requirements.txt
+            displayName: Setup Python Environment
+          - bash: |-
+              echo "Downloading dataset version $(datasetVersion)..."
+              python scripts/download_data.py --version $(datasetVersion)
+
+              echo "Validating data quality..."
+              python scripts/validate_data.py --input data/raw/
+            displayName: Download and Validate Dataset
+          - ${{ if eq(variables.runTraining, 'true') }}:
+              bash: |-
+                echo "Preprocessing training data..."
+                python scripts/preprocess.py --input data/raw/ --output data/processed/
+                python scripts/split_data.py --input data/processed/ --output data/splits/
+              displayName: Preprocess Training Data
+          - publish: data/processed/
+            artifact: processed-data
+            displayName: Publish Processed Data
+  - stage: ModelTraining
+    jobs:
+      - job: TrainModel
+        displayName: Train Machine Learning Model
+        dependsOn:
+          - PrepareData
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.runTraining, 'true') }}:
+              bash: |-
+                echo "Starting model training..."
+                python training/train_model.py \
+                	--data-path data/splits/train/ \
+                	--model-version $(modelVersion) \
+                	--mlflow-uri $(mlflowTrackingUri) \
+                	--experiment-name "pipeline-$(Build.BuildId)"
+              displayName: Train Model
+          - ${{ if eq(variables.runValidation, 'true') }}:
+              bash: |-
+                echo "Validating model performance..."
+                python validation/validate_model.py \
+                	--model-path models/$(modelVersion)/ \
+                	--test-data data/splits/test/ \
+                	--min-accuracy $(minimumAccuracy) \
+                	--output-report validation-report.json
+              displayName: Validate Model Performance
+          - publish: models/$(modelVersion)/
+            artifact: trained-model
+            displayName: Publish Model Artifacts
+          - publish: validation-report.json
+            artifact: validation-report
+            displayName: Publish Validation Report
+  - stage: ModelEvaluation
+    jobs:
+      - job: EvaluateModel
+        displayName: Comprehensive Model Evaluation
+        dependsOn:
+          - TrainModel
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "Running comprehensive model evaluation..."
+              python evaluation/performance_metrics.py --model models/$(modelVersion)/
+              python evaluation/bias_testing.py --model models/$(modelVersion)/
+              python evaluation/interpretability.py --model models/$(modelVersion)/
+            displayName: Run Model Evaluation Suite
+          - ${{ if eq(variables.Build.SourceBranch, 'refs/heads/main') }}:
+              bash: |-
+                echo "Comparing new model with production model..."
+                python evaluation/model_comparison.py \
+                	--new-model models/$(modelVersion)/ \
+                	--prod-model models/production/ \
+                	--output comparison-report.json
+              displayName: Compare with Production Model
+          - ${{ if not(eq(variables.Build.Reason, 'PullRequest')) }}:
+              bash: |-
+                echo "Registering model in MLflow model registry..."
+                python scripts/register_model.py \
+                	--model-path models/$(modelVersion)/ \
+                	--model-name "MyMLModel" \
+                	--version $(modelVersion) \
+                	--stage "Staging"
+              displayName: Register Model in MLflow
+  - stage: ModelDeployment
+    jobs:
+      - job: DeployModel
+        displayName: Deploy Model to Serving Infrastructure
+        dependsOn:
+          - EvaluateModel
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(eq(variables.deployModel, 'true'), succeeded('EvaluateModel')) }}:
+              bash: |-
+                echo "Deploying model to staging environment..."
+                docker build -t myregistry.azurecr.io/ml-model:$(modelVersion) .
+                docker push myregistry.azurecr.io/ml-model:$(modelVersion)
+                kubectl set image deployment/ml-model-service ml-model=myregistry.azurecr.io/ml-model:$(modelVersion) -n staging
+                kubectl rollout status deployment/ml-model-service -n staging
+              displayName: Deploy Model to Staging
+          - ${{ if succeeded('DeployModel') }}:
+              bash: |-
+                echo "Testing model serving endpoint..."
+                sleep 30
+                python tests/test_inference.py --endpoint http://staging-ml-api.mycompany.com/predict
+                python tests/load_test.py --endpoint http://staging-ml-api.mycompany.com/predict --duration 60
+              displayName: Run Model Serving Tests
+          - ${{ if and(eq(variables.environment, 'production'), eq(variables.Build.SourceBranch, 'refs/heads/main')) }}:
+              bash: |-
+                echo "Deploying to production with A/B testing..."
+                kubectl apply -f k8s/production/ab-deployment.yaml
+                kubectl patch service ml-model-service -p '{"spec":{"selector":{"version":"$(modelVersion)"}}}' -n production
+              displayName: Production Deployment (A/B Testing)
+          - ${{ if failed('DeployModel') }}:
+              bash: |-
+                echo "Model deployment failed - rolling back..."
+                kubectl rollout undo deployment/ml-model-service -n staging
+              displayName: Deployment Rollback

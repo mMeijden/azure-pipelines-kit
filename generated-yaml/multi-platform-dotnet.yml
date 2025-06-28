@@ -1,0 +1,123 @@
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+  paths:
+    include:
+      - src/*
+      - tests/*
+      - "*.json"
+variables:
+  buildConfiguration: Release
+  dotnetVersion: 8.x
+  runTests: "true"
+  publishArtifacts: "true"
+  platforms: windows,linux,macos
+stages:
+  - stage: CrossPlatformBuild
+    jobs:
+      - job: BuildWindows
+        displayName: Build on Windows
+        pool: windows-latest
+        steps:
+          - ${{ if eq(variables.targetPlatform, 'windows') }}:
+              powershell: |-
+                Write-Host "Setting up .NET $(dotnetVersion) on Windows"
+                dotnet --version
+                Write-Host "Restoring packages..."
+                dotnet restore
+              displayName: Setup .NET on Windows
+          - ${{ if eq(variables.targetPlatform, 'windows') }}:
+              powershell: |-
+                Write-Host "Building for Windows..."
+                dotnet build --configuration $(buildConfiguration) --runtime win-x64
+              displayName: Build Windows Application
+          - ${{ if eq(variables.runTests, 'true') }}:
+              powershell: |-
+                Write-Host "Running tests on Windows..."
+                dotnet test --configuration $(buildConfiguration) --logger trx
+              displayName: Run Windows Tests
+          - ${{ if eq(variables.publishArtifacts, 'true') }}:
+              publish: bin/Release/net8.0/win-x64/
+              artifact: windows-build
+              displayName: Publish Windows Artifacts
+      - job: BuildLinux
+        displayName: Build on Linux
+        pool: ubuntu-latest
+        steps:
+          - ${{ if eq(variables.targetPlatform, 'linux') }}:
+              bash: |-
+                echo "Setting up .NET $(dotnetVersion) on Linux"
+                dotnet --version
+                echo "Restoring packages..."
+                dotnet restore
+              displayName: Setup .NET on Linux
+          - ${{ if eq(variables.targetPlatform, 'linux') }}:
+              bash: |-
+                echo "Building for Linux..."
+                dotnet build --configuration $(buildConfiguration) --runtime linux-x64
+              displayName: Build Linux Application
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running tests on Linux..."
+                dotnet test --configuration $(buildConfiguration) --logger trx
+              displayName: Run Linux Tests
+          - ${{ if eq(variables.publishArtifacts, 'true') }}:
+              publish: bin/Release/net8.0/linux-x64/
+              artifact: linux-build
+              displayName: Publish Linux Artifacts
+      - job: BuildMacOS
+        displayName: Build on macOS
+        pool: macos-latest
+        steps:
+          - ${{ if eq(variables.targetPlatform, 'macos') }}:
+              bash: |-
+                echo "Setting up .NET $(dotnetVersion) on macOS"
+                dotnet --version
+                echo "Restoring packages..."
+                dotnet restore
+              displayName: Setup .NET on macOS
+          - ${{ if eq(variables.targetPlatform, 'macos') }}:
+              bash: |-
+                echo "Building for macOS..."
+                dotnet build --configuration $(buildConfiguration) --runtime osx-x64
+              displayName: Build macOS Application
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running tests on macOS..."
+                dotnet test --configuration $(buildConfiguration) --logger trx
+              displayName: Run macOS Tests
+          - ${{ if eq(variables.publishArtifacts, 'true') }}:
+              publish: bin/Release/net8.0/osx-x64/
+              artifact: macos-build
+              displayName: Publish macOS Artifacts
+  - stage: Integration
+    jobs:
+      - job: IntegrationTests
+        displayName: Cross-Platform Integration Tests
+        dependsOn:
+          - BuildWindows
+          - BuildLinux
+          - BuildMacOS
+        pool: ubuntu-latest
+        steps:
+          - ${{ if and(succeeded('BuildWindows'), succeeded('BuildLinux'), succeeded('BuildMacOS')) }}:
+              bash: |-
+                echo "Downloading artifacts from all platforms..."
+                # Download Windows artifacts
+                # Download Linux artifacts  
+                # Download macOS artifacts
+              displayName: Download All Platform Artifacts
+          - ${{ if not(or(eq(variables.Build.Reason, 'PullRequest'), eq(variables.buildConfiguration, 'Debug'))) }}:
+              bash: |-
+                echo "Running integration tests across platforms..."
+                echo "Testing Windows build compatibility..."
+                echo "Testing Linux build compatibility..."
+                echo "Testing macOS build compatibility..."
+              displayName: Run Cross-Platform Integration Tests
+          - ${{ if failed('IntegrationTests') }}:
+              bash: |-
+                echo "Integration tests failed - cleaning up..."
+                echo "Sending failure notifications..."
+              displayName: Integration Test Failure Cleanup

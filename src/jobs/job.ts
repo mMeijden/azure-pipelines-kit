@@ -1,5 +1,7 @@
 import { Construct } from "../construct";
 import { Step } from "../steps/step";
+import { TemplateExpression, isTemplateExpression } from "../expressions/template-expression";
+import { synthesizeConditional } from "../expressions/conditional-helpers";
 
 export interface JobProps {
 	/** ID of the job */
@@ -16,8 +18,8 @@ export interface JobProps {
 	readonly timeoutInMinutes?: string;
 	/** Time to wait for the job to cancel before forcibly terminating it */
 	readonly cancelTimeoutInMinutes?: string;
-	/** Steps to execute in this job */
-	readonly steps?: Step[];
+	/** Steps to execute in this job - can include conditional steps */
+	readonly steps?: (Step | TemplateExpression<Step>)[];
 	/** Pool configuration for this job */
 	readonly pool?: any;
 }
@@ -30,7 +32,7 @@ export class Job extends Construct {
 	public readonly continueOnError?: string;
 	public readonly timeoutInMinutes?: string;
 	public readonly cancelTimeoutInMinutes?: string;
-	public readonly steps?: Step[];
+	private _steps: (Step | TemplateExpression<Step>)[];
 	public readonly pool?: any;
 
 	constructor(props: JobProps) {
@@ -42,8 +44,23 @@ export class Job extends Construct {
 		this.continueOnError = props.continueOnError;
 		this.timeoutInMinutes = props.timeoutInMinutes;
 		this.cancelTimeoutInMinutes = props.cancelTimeoutInMinutes;
-		this.steps = props.steps;
+		this._steps = props.steps || [];
 		this.pool = props.pool;
+	}
+
+	/**
+	 * Get the current steps in this job
+	 */
+	public get steps(): (Step | TemplateExpression<Step>)[] {
+		return this._steps;
+	}
+
+	/**
+	 * Add a step to this job
+	 * @param step The step to add (can be a regular step or a template expression)
+	 */
+	public addStep(step: Step | TemplateExpression<Step>): void {
+		this._steps.push(step);
 	}
 
 	synthesize() {
@@ -52,7 +69,7 @@ export class Job extends Construct {
 		};
 
 		// Define optional properties to include if they have values
-		const optionalProps: Array<keyof Omit<JobProps, "job">> = [
+		const optionalProps: Array<keyof Omit<JobProps, "job" | "steps">> = [
 			"displayName",
 			"dependsOn",
 			"condition",
@@ -72,7 +89,7 @@ export class Job extends Construct {
 
 		// Add steps if provided
 		if (this.steps && this.steps.length > 0) {
-			result.steps = this.steps.map((step) => step.synthesize());
+			result.steps = synthesizeConditional(this.steps, (step) => step.synthesize());
 		}
 
 		return result;

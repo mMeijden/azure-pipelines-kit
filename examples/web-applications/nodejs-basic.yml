@@ -1,0 +1,66 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+variables:
+  nodeVersion: 18.x
+  buildConfiguration: production
+  runTests: "true"
+  deployToStaging: "true"
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildApp
+        displayName: Build Node.js Application
+        pool: ubuntu-latest
+        steps:
+          - bash: |-
+              echo "Setting up Node.js $(nodeVersion)"
+              nvm use $(nodeVersion)
+              node --version
+              npm --version
+            displayName: Setup Node.js
+          - bash: |-
+              echo "Installing dependencies..."
+              npm ci
+            displayName: Install Dependencies
+          - bash: |-
+              echo "Building application..."
+              npm run build
+            displayName: Build Application
+          - ${{ if eq(variables.runTests, 'true') }}:
+              bash: |-
+                echo "Running unit tests..."
+                npm test
+                echo "Running linting..."
+                npm run lint
+              displayName: Run Tests
+          - publish: dist/
+            artifact: webapp
+            displayName: Publish Build Artifacts
+  - stage: Deploy
+    jobs:
+      - job: DeployApp
+        displayName: Deploy to Staging
+        dependsOn:
+          - BuildApp
+        pool: ubuntu-latest
+        steps:
+          - ${{ if succeeded('BuildApp') }}:
+              bash: |-
+                echo "Downloading build artifacts..."
+                # Download artifacts from previous job
+              displayName: Download Build Artifacts
+          - ${{ if eq(variables.deployToStaging, 'true') }}:
+              bash: |-
+                echo "Deploying to staging..."
+                echo "Copying files to staging server..."
+                echo "Restarting application services..."
+                echo "Running smoke tests..."
+              displayName: Deploy to Staging Environment
+          - ${{ if always() }}:
+              bash: |-
+                echo "Cleaning up temporary files..."
+                rm -rf temp/
+              displayName: Cleanup

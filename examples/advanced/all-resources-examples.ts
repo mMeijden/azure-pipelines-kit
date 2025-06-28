@@ -6,7 +6,7 @@ import {
 	BuildResource,
 	PackageResource,
 	WebhookResource
-} from "../src/resources";
+} from "../../src/resources";
 import * as YAML from "yaml";
 
 /**
@@ -166,8 +166,6 @@ resources.addWebhook(githubWebhook);
 resources.addWebhook(customWebhook);
 
 // Generate YAML output
-console.log("=== Complete Resources YAML ===");
-console.log(YAML.stringify({ resources: resources.synthesize() }));
 
 // Export for use in pipeline definitions
 export {

@@ -5,4 +5,8 @@ export * from "./expression";
 export * from "./jobs";
 export * from "./steps";
 export * from "./resources";
+export * from "./expressions/template-expression";
+export * from "./expressions/conditional-helpers";
+export * from "./expressions/conditions";
+export * from "./expressions/direct-expressions";
 export * as YAML from "yaml";

@@ -12,7 +12,7 @@ import {
 	TemplateStep,
 	ReviewAppStep,
 	StepsBuilder
-} from "../src/steps";
+} from "../../src/steps";
 
 /**
  * Example showcasing all available Azure DevOps step types
