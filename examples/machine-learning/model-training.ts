@@ -297,8 +297,14 @@ pipeline.addStage(deploymentStage);
 // Synthesize pipeline when run as main module
 if (require.main === module) {
 	const yaml = pipeline.synthesize();
-	// Write to YAML file instead of console output
-	require("fs").writeFileSync(__dirname + "/model-training.yml", yaml);
+
+	// If CLI_MODE env var is set, output to console for CLI processing
+	if (process.env.CLI_MODE) {
+		console.log(yaml);
+	} else {
+		// Write to YAML file instead of console output
+		require("fs").writeFileSync(__dirname + "/model-training.yml", yaml);
+	}
 }
 
 export default pipeline;

@@ -109,7 +109,12 @@ export class Deployment extends Construct {
 		// Helper function to add property if it has a value
 		const addIfDefined = (key: string, value: any) => {
 			if (value !== undefined && value !== null) {
-				result[key] = value;
+				// Special handling for Pool instances
+				if (key === "pool" && value && typeof value.synthesize === "function") {
+					result[key] = value.synthesize();
+				} else {
+					result[key] = value;
+				}
 			}
 		};
 

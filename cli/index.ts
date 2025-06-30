@@ -64,18 +64,127 @@ async function generatePipelineYAML(inputFile: string, options: CLIOptions) {
 	}
 
 	try {
-		// Simple approach: just run ts-node with the file
-		const result = execSync(`npx ts-node "${inputPath}"`, {
-			cwd: projectRoot,
-			encoding: "utf8",
-			stdio: ["pipe", "pipe", "inherit"], // inherit stderr for errors
-			timeout: 30000
-		});
+		let yamlOutput = "";
 
-		const yamlOutput = result.trim();
+		// First, try to run the file directly (for files with console.log synthesis)
+		try {
+			const result = execSync(`npx ts-node "${inputPath}"`, {
+				cwd: projectRoot,
+				encoding: "utf8",
+				stdio: ["pipe", "pipe", "pipe"], // capture all output
+				timeout: 30000
+			});
+			yamlOutput = result.trim();
+
+			if (verbose && yamlOutput) {
+				console.log("✅ Pipeline synthesized via direct execution");
+			}
+		} catch (directRunError) {
+			if (verbose) {
+				console.log("⚠️  Direct execution didn't produce output, trying import approach...");
+			}
+		}
+
+		// If direct execution didn't work, try importing and calling synthesize
+		if (!yamlOutput) {
+			if (verbose) {
+				console.log("🔄 Attempting to import and synthesize pipeline...");
+			}
+
+			// Create a temporary script to import and synthesize the pipeline
+			const tempScript = `
+const path = require('path');
+const fs = require('fs');
+
+// Configure TypeScript compilation
+require('ts-node').register({
+	compilerOptions: {
+		module: 'commonjs',
+		target: 'es2020',
+		esModuleInterop: true,
+		allowSyntheticDefaultImports: true,
+		skipLibCheck: true
+	}
+});
+
+async function synthesizePipeline() {
+	try {
+		// Import the pipeline module
+		const pipelineModule = require('${inputPath.replace(/\\/g, "\\\\")}');
+		
+		// Try different export patterns
+		let pipeline = pipelineModule.default || pipelineModule.pipeline;
+		
+		// If no direct pipeline export, look for any object with a synthesize method
+		if (!pipeline || typeof pipeline.synthesize !== 'function') {
+			const exports = Object.values(pipelineModule);
+			pipeline = exports.find(exp => exp && typeof exp.synthesize === 'function');
+		}
+		
+		if (!pipeline || typeof pipeline.synthesize !== 'function') {
+			console.error('Error: No pipeline object with synthesize() method found.');
+			console.error('Expected exports: "default", "pipeline", or any object with synthesize() method.');
+			console.error('Available exports:', Object.keys(pipelineModule));
+			process.exit(1);
+		}
+		
+		const yaml = pipeline.synthesize();
+		console.log(yaml);
+	} catch (error) {
+		console.error('Import/synthesis error:', error.message);
+		if (error.stack) {
+			console.error(error.stack);
+		}
+		process.exit(1);
+	}
+}
+
+synthesizePipeline();
+			`;
+
+			const tempScriptPath = path.join(projectRoot, ".temp-synthesize.js");
+			fs.writeFileSync(tempScriptPath, tempScript);
+
+			try {
+				const result = execSync(`node "${tempScriptPath}"`, {
+					cwd: projectRoot,
+					encoding: "utf8",
+					stdio: ["pipe", "pipe", "inherit"], // inherit stderr for errors
+					timeout: 30000
+				});
+				yamlOutput = result.trim();
+
+				if (verbose && yamlOutput) {
+					console.log("✅ Pipeline synthesized via import");
+				}
+			} finally {
+				// Clean up temp file
+				if (fs.existsSync(tempScriptPath)) {
+					fs.unlinkSync(tempScriptPath);
+				}
+			}
+		}
 
 		if (!yamlOutput) {
-			throw new Error("No YAML output was generated. Make sure your pipeline calls pipeline.synthesize() and logs the result.");
+			throw new Error(`No YAML output was generated. Make sure your pipeline file:
+
+1. Exports a pipeline object as 'default' or 'pipeline', OR
+2. Exports any object with a synthesize() method, OR  
+3. Calls pipeline.synthesize() and console.log(result) when run directly
+
+Example patterns:
+
+// Pattern 1: Default export
+const pipeline = new Pipeline({ ... });
+export default pipeline;
+
+// Pattern 2: Named export  
+export const pipeline = new Pipeline({ ... });
+
+// Pattern 3: Direct synthesis (legacy)
+if (require.main === module) {
+  console.log(pipeline.synthesize());
+}`);
 		}
 
 		// Write YAML to output file

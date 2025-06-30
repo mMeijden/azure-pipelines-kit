@@ -7,15 +7,15 @@ import { Resources } from "../resources/resources";
 
 export interface PipelineProps {
 	/** Name of the pipeline */
-	readonly name?: string;
+	name?: string;
 	/** Trigger configuration */
-	readonly trigger?: any;
+	trigger?: any;
 	/** Pool configuration */
-	readonly pool?: any;
+	pool?: any;
 	/** Variables for the pipeline */
-	readonly variables?: any;
+	variables?: any;
 	/** Resources for the pipeline */
-	readonly resources?: Resources;
+	resources?: Resources;
 }
 
 export class Pipeline {
@@ -49,13 +49,50 @@ export class Pipeline {
 		this.resources = resources;
 	}
 
+	/**
+	 * Add or update the pipeline trigger
+	 */
+	addTrigger(trigger: any) {
+		this.props.trigger = trigger;
+	}
+
+	/**
+	 * Add or update a single pipeline variable
+	 */
+	addVariable(key: string, value: any) {
+		if (!this.props.variables) this.props.variables = {};
+		this.props.variables[key] = value;
+	}
+
+	/**
+	 * Add or update multiple pipeline variables
+	 */
+	addVariables(vars: Record<string, any>) {
+		if (!this.props.variables) this.props.variables = {};
+		Object.assign(this.props.variables, vars);
+	}
+
+	/**
+	 * Add or update the pipeline pool
+	 */
+	addPool(pool: any) {
+		this.props.pool = pool;
+	}
+
 	synthesize(): string {
 		const pipelineConfig: any = {};
 
 		// Add pipeline-level properties
 		if (this.props.name) pipelineConfig.name = this.props.name;
 		if (this.props.trigger) pipelineConfig.trigger = this.props.trigger;
-		if (this.props.pool) pipelineConfig.pool = this.props.pool;
+		if (this.props.pool) {
+			// Special handling for Pool instances
+			if (this.props.pool && typeof this.props.pool.synthesize === "function") {
+				pipelineConfig.pool = this.props.pool.synthesize();
+			} else {
+				pipelineConfig.pool = this.props.pool;
+			}
+		}
 		if (this.props.variables) pipelineConfig.variables = this.props.variables;
 
 		// Add resources if they exist

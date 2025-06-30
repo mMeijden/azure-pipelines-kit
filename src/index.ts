@@ -4,6 +4,7 @@ export * from "./pipeline";
 export * from "./expression";
 export * from "./jobs";
 export * from "./steps";
+export * from "./tasks";
 export * from "./resources";
 export * from "./expressions/template-expression";
 export * from "./expressions/conditional-helpers";

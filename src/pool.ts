@@ -23,14 +23,27 @@ export class Pool extends Construct {
 		}
 
 		if (this.props.demands) {
-			pool.demands = this.props.demands;
+			// Ensure demands is always an array for proper YAML output
+			if (Array.isArray(this.props.demands)) {
+				pool.demands = this.props.demands;
+			} else {
+				pool.demands = [this.props.demands];
+			}
 		}
 
 		if (this.props.vmImage) {
 			pool.vmImage = this.props.vmImage;
 		}
 
-		// Only return the pool object if it's not empty
-		return Object.keys(pool).length > 0 ? { pool } : {};
+		// Return just the pool configuration object
+		return pool;
+	}
+
+	/**
+	 * Synthesize for use at pipeline level (wraps in { pool: {...} })
+	 */
+	synthesizeForPipeline() {
+		const poolConfig = this.synthesize();
+		return Object.keys(poolConfig).length > 0 ? { pool: poolConfig } : {};
 	}
 }

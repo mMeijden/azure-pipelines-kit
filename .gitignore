@@ -150,6 +150,7 @@ test-*.yaml
 *-test.*
 temp/
 tmp/
+local-test/
 
 # Generated YAML files (optional - uncomment if you don't want to commit generated files)
 # *.yml

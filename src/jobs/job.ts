@@ -2,6 +2,7 @@ import { Construct } from "../construct";
 import { Step } from "../steps/step";
 import { TemplateExpression, isTemplateExpression } from "../expressions/template-expression";
 import { synthesizeConditional } from "../expressions/conditional-helpers";
+import { Task } from "../tasks/task";
 
 export interface JobProps {
 	/** ID of the job */
@@ -81,8 +82,12 @@ export class Job extends Construct {
 
 		// Add optional properties that have values
 		optionalProps.forEach((prop) => {
-			const value = this[prop];
+			let value = this[prop];
 			if (value !== undefined && value !== null) {
+				// Special handling for pool - if it's a Pool instance, synthesize it
+				if (prop === "pool" && value && typeof value.synthesize === "function") {
+					value = value.synthesize();
+				}
 				result[prop] = value;
 			}
 		});
